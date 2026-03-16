@@ -1,434 +1,557 @@
-"""
-한국 수출 데이터 분석 대시보드
-- Streamlit 기반
-- Selenium 크롤링 (tradedata.go.kr / kita.net)
-- 품목별 수출 실적 시각화
-- CSV 데이터 누적 저장
-"""
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
-from data_manager import (
-    load_data, update_data_with_scraping,
-    add_forecast, save_data, CATEGORIES,
-    ensure_historical_data, sanitize_dataframe,
-    get_cutoff_ym
-)
-from datetime import datetime
 import os
+from datetime import datetime
 
-# ── 페이지 설정 ──
+# ──────────────────────────────────────────────
+# 페이지 설정
+# ──────────────────────────────────────────────
 st.set_page_config(
-    page_title="한국 수출 데이터 대시보드",
-    page_icon="📊",
+    page_title="용접불량률 현황 대시보드",
+    page_icon="🔧",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# ── 커스텀 CSS ──
+# ──────────────────────────────────────────────
+# 커스텀 CSS
+# ──────────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Noto Sans KR', sans-serif;
+    /* 메트릭 카드 스타일링 */
+    div[data-testid="stMetric"] {
+        background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 16px 20px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
     }
-
+    div[data-testid="stMetric"] label {
+        color: #8ec8f8 !important;
+        font-size: 0.85rem !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: #ffffff !important;
+        font-size: 1.8rem !important;
+        font-weight: 700 !important;
+    }
+    /* 헤더 */
     .main-header {
-        background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 50%, #1a4a72 100%);
-        padding: 2rem 2.5rem;
+        background: linear-gradient(135deg, #0d1b2a 0%, #1b2838 50%, #1e3a5f 100%);
         border-radius: 16px;
-        margin-bottom: 1.5rem;
-        color: white;
-        box-shadow: 0 8px 32px rgba(30, 58, 95, 0.3);
+        padding: 24px 32px;
+        margin-bottom: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
     }
     .main-header h1 {
+        color: #ffffff;
         font-size: 1.8rem;
-        font-weight: 800;
         margin: 0;
-        letter-spacing: -0.5px;
     }
     .main-header p {
+        color: #8ec8f8;
         font-size: 0.95rem;
-        opacity: 0.85;
-        margin: 0.3rem 0 0 0;
+        margin: 4px 0 0 0;
     }
-
-    .kpi-card {
-        background: white;
-        border-radius: 14px;
-        padding: 1.2rem 1.5rem;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-        border-left: 4px solid;
-        transition: transform 0.2s;
-    }
-    .kpi-card:hover { transform: translateY(-2px); }
-    .kpi-label {
-        font-size: 0.8rem; color: #6b7280;
-        font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
-    }
-    .kpi-value { font-size: 1.6rem; font-weight: 800; margin: 0.2rem 0; }
-    .kpi-change { font-size: 0.85rem; font-weight: 600; }
-    .kpi-up { color: #10b981; }
-    .kpi-down { color: #ef4444; }
-
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-    }
-
-    .stButton>button { width: 100%; }
-
-    hr { border: none; border-top: 1px solid #e5e7eb; margin: 1rem 0; }
-
-    .source-badge {
-        padding: 0.4rem 0.8rem;
+    /* 섹션 리본 */
+    .section-label {
+        background: linear-gradient(90deg, #1e3a5f, transparent);
+        color: #8ec8f8;
+        padding: 8px 16px;
         border-radius: 8px;
-        font-size: 0.8rem;
         font-weight: 600;
+        font-size: 0.9rem;
+        margin-bottom: 12px;
         display: inline-block;
-        margin-top: 0.3rem;
     }
-    .source-live {
-        background: #d1fae5; color: #065f46;
+    /* 데이터프레임 스타일 */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        overflow: hidden;
     }
-    .source-dummy {
-        background: #fef3c7; color: #92400e;
+    /* 사이드바 */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0d1b2a 0%, #1b2838 100%);
+    }
+    /* 사이드바 새로고침 버튼 */
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
+        background: linear-gradient(135deg, #2d8cf0 0%, #1e6fd0 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 12px !important;
+        padding: 14px 20px !important;
+        font-size: 1.05rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.5px;
+        box-shadow: 0 4px 15px rgba(45, 140, 240, 0.3) !important;
+        transition: all 0.3s ease !important;
+    }
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {
+        background: linear-gradient(135deg, #3d9cff 0%, #2d8cf0 100%) !important;
+        box-shadow: 0 6px 20px rgba(45, 140, 240, 0.5) !important;
+        transform: translateY(-1px);
+    }
+    /* 사이드바 카드 */
+    .sidebar-card {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+    }
+    .sidebar-card h4 {
+        color: #8ec8f8;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin: 0 0 10px 0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    /* 사이드바 요약 수치 */
+    .sidebar-stat {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .sidebar-stat:last-child { border-bottom: none; }
+    .sidebar-stat .label { color: #8ec8f8; font-size: 0.85rem; }
+    .sidebar-stat .value { color: #ffffff; font-weight: 700; font-size: 1rem; }
+    /* 멀티셀렉트 태그 색상 */
+    span[data-baseweb="tag"] {
+        background-color: rgba(100, 180, 255, 0.25) !important;
+        border-color: rgba(100, 180, 255, 0.4) !important;
+        color: #8ec8f8 !important;
+    }
+    span[data-baseweb="tag"] span { color: #8ec8f8 !important; }
+    span[data-baseweb="tag"] svg { fill: #8ec8f8 !important; }
+    /* 파일 수정 시간 배지 */
+    .update-badge {
+        background: rgba(46, 204, 113, 0.15);
+        border: 1px solid rgba(46, 204, 113, 0.3);
+        border-radius: 8px;
+        padding: 8px 12px;
+        margin-top: 8px;
+        text-align: center;
+        font-size: 0.8rem;
+        color: #2ecc71;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── 데이터 로드 (CSV 캐시 → 빠른 재접속) ──
-@st.cache_data(ttl=3600)
-def get_data():
-    df = load_data()
-    # 과거 데이터 보장 (부족하면 자동 생성)
-    df, _ = ensure_historical_data(df)
-    # 타입 정제 (문자열 → float)
-    df = sanitize_dataframe(df)
-    if len(df) > 0:
-        df = add_forecast(df, months_ahead=3)
+# ──────────────────────────────────────────────
+# 데이터 로드 및 전처리
+# ──────────────────────────────────────────────
+@st.cache_data(ttl=300)  # 5분마다 캐시 자동 만료
+def load_data(_file_mtime=None):
+    """Excel 데이터를 로드하고 전처리. _file_mtime은 캐시 무효화용 파라미터."""
+    file_path = os.path.join(os.path.dirname(__file__), "welding data.xlsx")
+    
+    # 상단 3행 건너뛰기 → 4번째 행을 헤더로
+    df = pd.read_excel(file_path, header=None, skiprows=3)
+    
+    # 불필요한 빈 컬럼 제거 (열 0, 1, 17, 18)
+    cols_to_drop = [c for c in [0, 1, 17, 18] if c in df.columns]
+    df = df.drop(columns=cols_to_drop)
+    df = df.reset_index(drop=True)
+    
+    # 컬럼명 재설정 (구분/소속, 목표, 당일×4, 당월×4, 누계×4)
+    new_columns = [
+        "소속", "구분_sub", "목표",
+        "당일_검사", "당일_불량", "당일_불량률", "당일_달성률",
+        "당월_검사", "당월_불량", "당월_불량률", "당월_달성률",
+        "누계_검사", "누계_불량", "누계_불량률", "누계_달성률",
+    ]
+    
+    # 실제 컬럼 수에 맞게 처리
+    if len(df.columns) == 15:
+        df.columns = new_columns
+    else:
+        # 컬럼 수가 다를 경우 안전하게 처리
+        actual_cols = list(df.columns)
+        mapping = {}
+        # 첫 번째 행(헤더 행) 확인
+        header_row = df.iloc[0]
+        
+        # 기본 매핑: 열 인덱스 기반
+        col_names = [
+            "소속", "목표",
+            "당일_검사", "당일_불량", "당일_불량률", "당일_달성률",
+            "당월_검사", "당월_불량", "당월_불량률", "당월_달성률",
+            "누계_검사", "누계_불량", "누계_불량률", "누계_달성률",
+        ]
+        for i, name in enumerate(col_names):
+            if i < len(actual_cols):
+                mapping[actual_cols[i]] = name
+        df = df.rename(columns=mapping)
+    
+    # 첫 번째 행은 헤더(소속, 목표, 검사...) 이므로 제거
+    df = df.iloc[1:]
+    
+    # 구분_sub 열이 있으면 소속 열과 병합 후 제거
+    if "구분_sub" in df.columns:
+        df["소속"] = df["소속"].fillna(df["구분_sub"])
+        df = df.drop(columns=["구분_sub"])
+    
+    # 소속이 NaN인 행 제거
+    df = df.dropna(subset=["소속"])
+    
+    # 소속이 비어있거나 메타 텍스트가 포함된 행 제거
+    exclude_keywords = ["■", "○", "구분", "월별", "소속", "목표"]
+    df = df[~df["소속"].astype(str).str.contains("|".join(exclude_keywords), na=False)]
+    
+    # 목표 열이 NaN인 행 제거 (하단 월별 추이 데이터 등)
+    df = df.dropna(subset=["목표"])
+    
+    # 숫자 컬럼 변환
+    numeric_cols = [c for c in df.columns if c not in ["소속"]]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    
+    # 인덱스 리셋
+    df = df.reset_index(drop=True)
+    
     return df
 
 
+# ──────────────────────────────────────────────
+# 메인 앱
+# ──────────────────────────────────────────────
 def main():
+    # 데이터 로드 (파일 수정 시간을 캐시 키로 사용하여 변경 시 자동 갱신)
+    file_path = os.path.join(os.path.dirname(__file__), "welding data.xlsx")
+    try:
+        file_mtime = os.path.getmtime(file_path)
+        df = load_data(_file_mtime=file_mtime)
+    except Exception as e:
+        st.error(f"데이터 로드 실패: {e}")
+        st.stop()
+    
     # ── 사이드바 ──
     with st.sidebar:
-        st.markdown("### 📊 대시보드 설정")
-        st.divider()
-
-        # 품목 선택
-        categories = list(CATEGORIES.keys())
-        selected_category = st.selectbox(
-            "🏭 수출 품목 선택",
-            categories,
-            index=0,
-            help="분석할 수출 품목을 선택하세요"
-        )
-
-        st.divider()
-
-        # 기간 필터
-        st.markdown("##### 📅 기간 설정")
-        year_range = st.slider(
-            "연도 범위",
-            min_value=2024,
-            max_value=2027,
-            value=(2024, 2027)
-        )
-
-        st.divider()
-
-        # ── 데이터 관리 ──
-        st.markdown("##### 🔄 데이터 관리")
-        st.caption("tradedata.go.kr / kita.net 크롤링")
-
-        if st.button("🔄 데이터 업데이트", type="primary"):
-            status_area = st.empty()
-            progress_bar = st.progress(0)
-            log_area = st.empty()
-            logs = []
-
-            def progress_callback(msg):
-                logs.append(msg)
-                status_area.markdown(f"**{msg}**")
-                progress = min(len(logs) / 30, 0.95)
-                progress_bar.progress(progress)
-                log_area.text("\n".join(logs[-5:]))
-
-            progress_callback("크롤링 시작...")
-            result = update_data_with_scraping(progress_callback)
-            progress_bar.progress(1.0)
-
-            if result is not None:
-                st.cache_data.clear()
-                status_area.success("✅ 크롤링 데이터 업데이트 완료!")
-            else:
-                status_area.error("❌ 크롤링 실패. 사이트 접속을 확인하세요.")
-
+        st.markdown("")
+        
+        # 새로고침 버튼 (큰 사이즈)
+        if st.button("🔄  데이터 새로고침", use_container_width=True):
+            st.cache_data.clear()
             st.rerun()
-
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            if st.button("🗑️ 초기화", help="모든 데이터 삭제 후 새로 시작"):
-                data_file = os.path.join(os.path.dirname(__file__), "export_data.csv")
-                if os.path.exists(data_file):
-                    os.remove(data_file)
-                st.cache_data.clear()
-                st.success("✅ 초기화 완료!")
-                st.rerun()
-
-        with col_btn2:
-            df_all = get_data()
-            csv = df_all.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-            st.download_button(
-                "📥 CSV",
-                csv,
-                "export_data.csv",
-                "text/csv",
-                "text/csv"
-            )
-
-        st.divider()
+        
+        last_updated = datetime.fromtimestamp(file_mtime).strftime("%Y-%m-%d %H:%M:%S")
         st.markdown(
-            f"<small>마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M')}</small>",
-            unsafe_allow_html=True
+            f'<div class="update-badge">📅 마지막 업데이트: {last_updated}</div>',
+            unsafe_allow_html=True,
         )
-
-    # ── 메인 영역 ──
-    st.markdown(f"""
+        
+        st.markdown("")
+        
+        # 기간 선택
+        st.markdown(
+            '<div class="sidebar-card"><h4>📅 기간 선택</h4></div>',
+            unsafe_allow_html=True,
+        )
+        period_option = st.radio(
+            "기간",
+            ["당일", "당월", "누계"],
+            index=1,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        
+        st.markdown("")
+        
+        # 소속 필터
+        st.markdown(
+            '<div class="sidebar-card"><h4>📋 소속 필터</h4></div>',
+            unsafe_allow_html=True,
+        )
+        all_departments = sorted(df["소속"].unique().tolist())
+        selected = st.multiselect(
+            "소속 선택",
+            options=all_departments,
+            default=all_departments,
+            label_visibility="collapsed",
+        )
+        
+        st.markdown("")
+        
+        # 데이터 요약 카드
+        st.markdown(f'''
+        <div class="sidebar-card">
+            <h4>📊 데이터 요약</h4>
+            <div class="sidebar-stat">
+                <span class="label">전체 소속</span>
+                <span class="value">{len(all_departments)}개</span>
+            </div>
+            <div class="sidebar-stat">
+                <span class="label">선택 소속</span>
+                <span class="value">{len(selected)}개</span>
+            </div>
+        </div>
+        ''', unsafe_allow_html=True)
+    
+    # 필터 적용
+    if selected:
+        filtered_df = df[df["소속"].isin(selected)].copy()
+    else:
+        filtered_df = df.copy()
+    
+    # ── 헤더 ──
+    st.markdown("""
     <div class="main-header">
-        <h1>🇰🇷 한국 수출 데이터 분석 및 예측 대시보드</h1>
-        <p>품목별 월간 수출 실적 및 향후 예측 분석 | 데이터 기준: 2024년 1월 ~ | 🌐 tradedata.go.kr 크롤링</p>
+        <h1>🔧 용접불량률 현황 대시보드</h1>
+        <p>실시간 용접 품질 모니터링 · 소속별 불량률 & 달성률 현황</p>
     </div>
     """, unsafe_allow_html=True)
-
-    # 데이터 로드
-    df = get_data()
-
-    # 데이터 없으면 안내 메시지
-    if len(df) == 0:
-        st.info("📭 저장된 데이터가 없습니다. 사이드바의 **🔄 데이터 업데이트** 버튼을 눌러 크롤링을 시작하세요.")
-        st.stop()
-
-    # 선택 품목 필터링
-    cat_df = df[df["품목"] == selected_category].copy()
-    cat_df["날짜_dt"] = pd.to_datetime(cat_df["날짜"] + "-01")
-
-    # 연도 필터 적용
-    cat_df = cat_df[
-        (cat_df["날짜_dt"].dt.year >= year_range[0]) &
-        (cat_df["날짜_dt"].dt.year <= year_range[1])
-    ]
-
-    # 전월 기준 cutoff (이번 달은 집계 중이므로 제외)
-    cutoff_ym = get_cutoff_ym()
     
-    # 실적: 전월까지만
-    actual_df = cat_df[
-        (cat_df["구분"] == "실적") & 
-        (cat_df["날짜"] <= cutoff_ym)
-    ].sort_values("날짜")
-    
-    # 예측: 전월 이후 날짜 또는 구분='예측'
-    forecast_df = cat_df[
-        (cat_df["구분"] == "예측") | 
-        (cat_df["날짜"] > cutoff_ym)
-    ].sort_values("날짜")
-
     # ── KPI 카드 ──
-    if len(actual_df) >= 2:
-        latest_value = actual_df.iloc[-1]["수출액(억달러)"]
-        prev_value = actual_df.iloc[-2]["수출액(억달러)"]
-        change_pct = ((latest_value - prev_value) / prev_value) * 100 if prev_value != 0 else 0
-        yoy_value = None
-
-        latest_date = actual_df.iloc[-1]["날짜"]
-        latest_dt = pd.to_datetime(latest_date + "-01")
-        yoy_date = (latest_dt - pd.DateOffset(years=1)).strftime("%Y-%m")
-        yoy_row = actual_df[actual_df["날짜"] == yoy_date]
-        if len(yoy_row) > 0 and yoy_row.iloc[0]["수출액(억달러)"] != 0:
-            yoy_value = ((latest_value - yoy_row.iloc[0]["수출액(억달러)"]) / yoy_row.iloc[0]["수출액(억달러)"]) * 100
-
-        latest_year = latest_dt.year
-        ytd = actual_df[actual_df["날짜_dt"].dt.year == latest_year]["수출액(억달러)"].sum()
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            ch_cls = "kpi-up" if change_pct >= 0 else "kpi-down"
-            ch_arr = "▲" if change_pct >= 0 else "▼"
-            st.markdown(f"""
-            <div class="kpi-card" style="border-color: #3b82f6;">
-                <div class="kpi-label">최신 실적 ({latest_date})</div>
-                <div class="kpi-value" style="color: #1e3a5f;">{latest_value}억$</div>
-                <div class="kpi-change {ch_cls}">{ch_arr} 전월 대비 {abs(change_pct):.1f}%</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col2:
-            if yoy_value is not None:
-                y_cls = "kpi-up" if yoy_value >= 0 else "kpi-down"
-                y_arr = "▲" if yoy_value >= 0 else "▼"
-                st.markdown(f"""
-                <div class="kpi-card" style="border-color: #8b5cf6;">
-                    <div class="kpi-label">전년 동월 대비</div>
-                    <div class="kpi-value" style="color: #6d28d9;">{y_arr} {abs(yoy_value):.1f}%</div>
-                    <div class="kpi-change" style="color: #6b7280;">YoY 변화율</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div class="kpi-card" style="border-color: #8b5cf6;">
-                    <div class="kpi-label">전년 동월 대비</div>
-                    <div class="kpi-value" style="color: #6d28d9;">-</div>
-                    <div class="kpi-change" style="color: #6b7280;">데이터 부족</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        with col3:
-            st.markdown(f"""
-            <div class="kpi-card" style="border-color: #10b981;">
-                <div class="kpi-label">{latest_year}년 누적 수출</div>
-                <div class="kpi-value" style="color: #047857;">{ytd:,.1f}억$</div>
-                <div class="kpi-change" style="color: #6b7280;">YTD 합계</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col4:
-            if len(forecast_df) > 0:
-                nf = forecast_df.iloc[0]["수출액(억달러)"]
-                st.markdown(f"""
-                <div class="kpi-card" style="border-color: #f59e0b;">
-                    <div class="kpi-label">다음 월 예측</div>
-                    <div class="kpi-value" style="color: #d97706;">{nf}억$</div>
-                    <div class="kpi-change" style="color: #6b7280;">3개월 이동평균 기반</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div class="kpi-card" style="border-color: #f59e0b;">
-                    <div class="kpi-label">다음 월 예측</div>
-                    <div class="kpi-value" style="color: #d97706;">-</div>
-                    <div class="kpi-change" style="color: #6b7280;">예측 없음</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── 메인 차트 ──
-    st.markdown(f"### 📈 {selected_category} 월별 수출 추이")
-
-    fig = go.Figure()
-
-    if len(actual_df) > 0:
-        fig.add_trace(go.Scatter(
-            x=actual_df["날짜"], y=actual_df["수출액(억달러)"],
-            mode="lines+markers", name="실적 (Actual)",
-            line=dict(color="#3b82f6", width=3),
-            marker=dict(size=7, color="#3b82f6"),
-            hovertemplate="<b>%{x}</b><br>수출액: %{y}억$<extra>실적</extra>"
-        ))
-
-    if len(actual_df) > 0 and len(forecast_df) > 0:
-        bridge_df = pd.concat([actual_df.tail(1), forecast_df.head(1)])
-        fig.add_trace(go.Scatter(
-            x=bridge_df["날짜"], y=bridge_df["수출액(억달러)"],
-            mode="lines", name="_bridge",
-            line=dict(color="#ef4444", width=2, dash="dot"),
-            showlegend=False, hoverinfo="skip"
-        ))
-
-    if len(forecast_df) > 0:
-        fig.add_trace(go.Scatter(
-            x=forecast_df["날짜"], y=forecast_df["수출액(억달러)"],
-            mode="lines+markers", name="예측 (Forecast)",
-            line=dict(color="#ef4444", width=2, dash="dot"),
-            marker=dict(size=7, color="#ef4444", symbol="diamond"),
-            hovertemplate="<b>%{x}</b><br>예측: %{y}억$<extra>예측</extra>"
-        ))
-
-
-
-    fig.update_layout(
-        height=500, plot_bgcolor="white", paper_bgcolor="white",
-        font=dict(family="Noto Sans KR, sans-serif"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=13)),
-        xaxis=dict(title="", gridcolor="#f3f4f6", tickformat="%Y-%m", dtick="M1", tickangle=-45),
-        yaxis=dict(title="수출액 (억 달러)", gridcolor="#f3f4f6", zeroline=False, autorange=True),
-        margin=dict(l=60, r=20, t=40, b=60),
-        hovermode="x unified"
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ── 상세 테이블 ──
-    st.markdown(f"### 📋 {selected_category} 월별 상세 데이터")
-
-    display_df = cat_df[["날짜", "수출액(억달러)", "구분"]].copy()
-    display_df = display_df.sort_values("날짜", ascending=False).reset_index(drop=True)
-
-    st.dataframe(
-        display_df,
-        height=400,
-        hide_index=True,
-        column_config={
-            "날짜": st.column_config.TextColumn("📅 날짜"),
-            "수출액(억달러)": st.column_config.NumberColumn("💰 수출액 (억 달러)", format="%.1f"),
-            "구분": st.column_config.TextColumn("📌 구분"),
-        }
-    )
-
-    # ── 전체 품목 비교 ──
-    st.markdown("### 🏭 품목별 최신 실적 비교")
-
-    comparison_rows = []
-    for cat in CATEGORIES.keys():
-        cat_actual = df[(df["품목"] == cat) & (df["구분"] == "실적")].sort_values("날짜")
-        if len(cat_actual) >= 2:
-            latest = cat_actual.iloc[-1]
-            prev = cat_actual.iloc[-2]
-            pv = prev["수출액(억달러)"]
-            change = ((latest["수출액(억달러)"] - pv) / pv) * 100 if pv != 0 else 0
-            comparison_rows.append({
-                "품목": cat,
-                "최신 실적(억$)": latest["수출액(억달러)"],
-                "기준 월": latest["날짜"],
-                "전월 대비(%)": round(change, 1)
-            })
-
-    if comparison_rows:
-        comp_df = pd.DataFrame(comparison_rows).sort_values("최신 실적(억$)", ascending=False)
-
-        fig2 = go.Figure()
-        colors = ["#3b82f6" if v >= 0 else "#ef4444" for v in comp_df["전월 대비(%)"]]
-
-        fig2.add_trace(go.Bar(
-            x=comp_df["품목"], y=comp_df["최신 실적(억$)"],
-            marker_color=colors,
-            text=comp_df["최신 실적(억$)"].apply(lambda x: f"{x}억$"),
-            textposition="outside",
-            hovertemplate="<b>%{x}</b><br>수출액: %{y}억$<extra></extra>"
-        ))
-
-        fig2.update_layout(
-            height=400, plot_bgcolor="white", paper_bgcolor="white",
-            font=dict(family="Noto Sans KR, sans-serif"),
-            xaxis=dict(title=""), yaxis=dict(title="수출액 (억 달러)", gridcolor="#f3f4f6"),
-            margin=dict(l=60, r=20, t=20, b=60), showlegend=False
+    prefix = period_option  # 당일 / 당월 / 누계
+    
+    col_defect = f"{prefix}_불량률"
+    col_achieve = f"{prefix}_달성률"
+    col_inspect = f"{prefix}_검사"
+    col_defect_cnt = f"{prefix}_불량"
+    
+    # 전략팀 행 찾기 (전략팀 또는 전계장)
+    summary_row = filtered_df[filtered_df["소속"].str.contains("전략|전계", na=False)]
+    
+    # 주요 소속 식별
+    kpi_sources = {}
+    for dept in ["가공", "건조", "의장"]:
+        match = filtered_df[filtered_df["소속"] == dept]
+        if not match.empty:
+            kpi_sources[dept] = match.iloc[0]
+    
+    # KPI 행
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    
+    # 전체 평균 불량률
+    total_inspect = filtered_df[col_inspect].sum()
+    total_defect = filtered_df[col_defect_cnt].sum()
+    avg_defect_rate = (total_defect / total_inspect * 100) if total_inspect > 0 else 0
+    
+    with kpi1:
+        st.metric(
+            label=f"📊 전체 {prefix} 불량률",
+            value=f"{avg_defect_rate:.2f}%",
         )
-
-        st.plotly_chart(fig2, use_container_width=True)
-
-    # ── 푸터 ──
-    st.divider()
-    source_name = "tradedata.go.kr / kita.net 크롤링"
-    st.markdown(f"""
-    <div style="text-align:center; color:#9ca3af; font-size:0.8rem; padding:1rem 0;">
-        📊 한국 수출 데이터 대시보드 | 데이터 출처: {source_name}<br>
-        예측: 3개월 이동평균 + 트렌드 보정 | 크롤링: Selenium (Chrome)
-    </div>
-    """, unsafe_allow_html=True)
+    
+    with kpi2:
+        if "가공" in kpi_sources:
+            val = kpi_sources["가공"][col_defect]
+            achieve = kpi_sources["가공"][col_achieve]
+            st.metric(
+                label=f"🏭 가공 {prefix} 불량률",
+                value=f"{val:.2f}%",
+                delta=f"달성률 {achieve:.1f}%",
+                delta_color="inverse",
+            )
+        else:
+            st.metric(label=f"🏭 가공 {prefix} 불량률", value="N/A")
+    
+    with kpi3:
+        if "건조" in kpi_sources:
+            val = kpi_sources["건조"][col_defect]
+            achieve = kpi_sources["건조"][col_achieve]
+            st.metric(
+                label=f"🏗️ 건조 {prefix} 불량률",
+                value=f"{val:.2f}%",
+                delta=f"달성률 {achieve:.1f}%",
+                delta_color="inverse",
+            )
+        else:
+            st.metric(label=f"🏗️ 건조 {prefix} 불량률", value="N/A")
+    
+    with kpi4:
+        if not summary_row.empty:
+            val = summary_row.iloc[0][col_defect]
+            achieve = summary_row.iloc[0][col_achieve]
+            st.metric(
+                label=f"📋 전략팀 {prefix} 불량률",
+                value=f"{val:.2f}%",
+                delta=f"달성률 {achieve:.1f}%",
+                delta_color="inverse",
+            )
+        else:
+            avg_achieve = filtered_df[col_achieve].mean()
+            st.metric(
+                label=f"📋 전체 {prefix} 달성률",
+                value=f"{avg_achieve:.1f}%",
+            )
+    
+    st.markdown("")
+    
+    # ── 차트 영역 ──
+    chart_col1, chart_col2 = st.columns(2)
+    
+    with chart_col1:
+        st.markdown('<div class="section-label">📊 소속별 불량률 비교</div>', unsafe_allow_html=True)
+        
+        fig1 = go.Figure()
+        fig1.add_trace(go.Bar(
+            x=filtered_df["소속"],
+            y=filtered_df[col_defect],
+            name="불량률 (%)",
+            marker=dict(
+                color=filtered_df[col_defect],
+                colorscale=[[0, "#2d8cf0"], [0.5, "#f5a623"], [1, "#e74c3c"]],
+                line=dict(width=0),
+                cornerradius=4,
+            ),
+            text=filtered_df[col_defect].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else ""),
+            textposition="outside",
+            textfont=dict(size=11, color="#ffffff"),
+        ))
+        
+        # 목표선
+        target_val = filtered_df["목표"].mean() if not filtered_df.empty else 0.6
+        fig1.add_hline(
+            y=target_val, line_dash="dash", line_color="#e74c3c", line_width=2,
+            annotation_text=f"목표: {target_val:.1f}%",
+            annotation_position="top right",
+            annotation_font=dict(color="#e74c3c", size=12),
+        )
+        
+        fig1.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            height=420,
+            margin=dict(l=40, r=20, t=40, b=60),
+            xaxis=dict(title="소속", tickangle=-30),
+            yaxis=dict(title="불량률 (%)"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig1, width="stretch")
+    
+    with chart_col2:
+        st.markdown('<div class="section-label">🎯 소속별 달성률 비교</div>', unsafe_allow_html=True)
+        
+        fig2 = go.Figure()
+        
+        # 달성률 100% 기준 색상
+        colors = []
+        for val in filtered_df[col_achieve]:
+            if pd.isna(val):
+                colors.append("#555555")
+            elif val >= 100:
+                colors.append("#2ecc71")
+            elif val >= 50:
+                colors.append("#f5a623")
+            else:
+                colors.append("#e74c3c")
+        
+        fig2.add_trace(go.Bar(
+            x=filtered_df["소속"],
+            y=filtered_df[col_achieve],
+            name="달성률 (%)",
+            marker=dict(color=colors, line=dict(width=0), cornerradius=4),
+            text=filtered_df[col_achieve].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else ""),
+            textposition="outside",
+            textfont=dict(size=11, color="#ffffff"),
+        ))
+        
+        # 100% 기준선
+        fig2.add_hline(
+            y=100, line_dash="dash", line_color="#2ecc71", line_width=2,
+            annotation_text="목표 달성 (100%)",
+            annotation_position="top right",
+            annotation_font=dict(color="#2ecc71", size=12),
+        )
+        
+        fig2.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            height=420,
+            margin=dict(l=40, r=20, t=40, b=60),
+            xaxis=dict(title="소속", tickangle=-30),
+            yaxis=dict(title="달성률 (%)"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig2, width="stretch")
+    
+    # ── 소속별 불량률 & 달성률 그룹 막대 ──
+    st.markdown('<div class="section-label">📈 소속별 불량률 vs 달성률 비교</div>', unsafe_allow_html=True)
+    
+    fig3 = go.Figure()
+    fig3.add_trace(go.Bar(
+        x=filtered_df["소속"],
+        y=filtered_df[col_defect],
+        name=f"{prefix} 불량률",
+        marker_color="#e74c3c",
+        text=filtered_df[col_defect].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else ""),
+        textposition="outside",
+        textfont=dict(size=10),
+    ))
+    fig3.add_trace(go.Bar(
+        x=filtered_df["소속"],
+        y=filtered_df[col_achieve],
+        name=f"{prefix} 달성률",
+        marker_color="#2d8cf0",
+        text=filtered_df[col_achieve].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else ""),
+        textposition="outside",
+        textfont=dict(size=10),
+    ))
+    fig3.update_layout(
+        barmode="group",
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        height=400,
+        margin=dict(l=40, r=20, t=40, b=60),
+        xaxis=dict(title="소속", tickangle=-30),
+        yaxis=dict(title="비율 (%)"),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+    )
+    st.plotly_chart(fig3, width="stretch")
+    
+    # ── 데이터 테이블 ──
+    st.markdown('<div class="section-label">📋 전체 데이터 테이블</div>', unsafe_allow_html=True)
+    
+    # 표시용 데이터프레임 포맷
+    display_df = filtered_df.copy()
+    
+    # 퍼센트 컬럼 포맷
+    pct_cols = [c for c in display_df.columns if "불량률" in c or "달성률" in c]
+    
+    st.dataframe(
+        display_df.style
+        .format({col: "{:.2f}%" for col in pct_cols})
+        .format({"목표": "{:.2f}"})
+        .background_gradient(
+            subset=[c for c in pct_cols if "불량률" in c],
+            cmap="YlOrRd",
+            vmin=0,
+        )
+        .background_gradient(
+            subset=[c for c in pct_cols if "달성률" in c],
+            cmap="RdYlGn",
+            vmin=0,
+        ),
+        width="stretch",
+        height=400,
+    )
+    
+    # 푸터
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align: center; color: #666; font-size: 0.8rem;'>"
+        "📊 용접불량률 현황 대시보드 · 데이터 출처: welding data.xlsx"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
